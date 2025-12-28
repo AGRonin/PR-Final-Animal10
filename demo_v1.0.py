@@ -36,7 +36,6 @@ class AnimalsDataset(Dataset):
 
         # 筛选对应的数据集 (train/val/test)
         df = df[df["split"] == self.split].reset_index(drop=True)
-
         self.paths = [self.root / p for p in df["path"].tolist()]
         self.labels = [self.classes_to_idx[c] for c in df["label"].tolist()]
 
