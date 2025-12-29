@@ -7,6 +7,9 @@ from pathlib import Path
 import pandas as pd
 from PIL import Image
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+from torchvision import models
+from tqdm import tqdm
+from torchvision.models import resnet50, ResNet50_Weights
 
 # 自动检测计算设备
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -36,6 +39,18 @@ class AnimalsDataset(Dataset):
 
         # 筛选对应的数据集 (train/val/test)
         df = df[df["split"] == self.split].reset_index(drop=True)
+        #====== 子采样：每个类别最多取 N 张（仅用于训练集） ======
+        if self.split == "train":
+            max_per_class = 200
+
+            df = (
+                df.groupby("label", group_keys=False)
+                  .apply(lambda x: x.sample(
+                      n=min(len(x), max_per_class),
+                      random_state=42
+                  ))
+                  .reset_index(drop=True)
+        )
         self.paths = [self.root / p for p in df["path"].tolist()]
         self.labels = [self.classes_to_idx[c] for c in df["label"].tolist()]
 
@@ -92,39 +107,34 @@ def data_load(root):
     return data_class
 
 
-# 深度神经网络设计
-class CNN(nn.Module):
+# 使用ResNet深度神经网络
+# class ResNetClassifier(nn.Module):
+#     def __init__(self, num_classes):
+#         super(ResNetClassifier, self).__init__()
+#         # 加载 ResNet18 预训练模型
+#         self.backbone = models.resnet18(pretrained=True)
+#
+#         # 替换最后的全连接层
+#         in_features = self.backbone.fc.in_features
+#         self.backbone.fc = nn.Linear(in_features, num_classes)
+#
+#     def forward(self, x):
+#         return self.backbone(x)
+
+class ResNetClassifier(nn.Module):
     def __init__(self, num_classes):
-        super(CNN, self).__init__()
-        # 卷积层：提取图像特征
-        self.features = nn.Sequential(
-            # 卷积层1: 3通道输入 -> 16通道输出
-            nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),  # 224 -> 112
+        super(ResNetClassifier, self).__init__()
 
-            # 卷积层2: 16通道 -> 32通道
-            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),  # 112 -> 56
+        # 使用最新 torchvision 权重接口
+        weights = ResNet50_Weights.DEFAULT
+        self.backbone = resnet50(weights=weights)
 
-            # 卷积层3: 32通道 -> 64通道
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),  # 56 -> 28
-        )
-        # 全连接层：分类
-        self.classifier = nn.Sequential(
-            nn.Flatten(),  # 展平特征图：64 * 28 * 28
-            nn.Linear(64 * 28 * 28, 512),  # 隐藏层
-            nn.ReLU(),
-            nn.Linear(512, num_classes)  # 输出层：对应10个动物类别
-        )
+        # 替换分类头
+        in_features = self.backbone.fc.in_features  # 2048
+        self.backbone.fc = nn.Linear(in_features, num_classes)
 
     def forward(self, x):
-        x = self.features(x)
-        x = self.classifier(x)
-        return x
+        return self.backbone(x)
 
 
 # 准确率评估
@@ -181,16 +191,36 @@ def train_net(model, lr, num_epochs, train_loader, val_loader):
         # 训练过程
         model.train()
         total_loss = 0.0
-        for images, labels in train_loader:
-            # 前向传播
+        # for images, labels in train_loader:
+        #     images, labels = images.to(DEVICE), labels.to(DEVICE)
+        #     # 前向传播
+        #     logits = model(images)
+        #     # 误差计算
+        #     loss = criterion(logits, labels)
+        #     # 反向传播和参数更新
+        #     optimizer.zero_grad()
+        #     loss.backward()
+        #     optimizer.step()
+        #     total_loss += loss.item()
+        progress_bar = tqdm(
+            train_loader,
+            desc=f"Epoch [{epoch + 1}/{num_epochs}]",
+            leave=False
+        )
+
+        for images, labels in progress_bar:
+            images, labels = images.to(DEVICE), labels.to(DEVICE)
+
             logits = model(images)
-            # 误差计算
             loss = criterion(logits, labels)
-            # 反向传播和参数更新
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+
             total_loss += loss.item()
+
+            progress_bar.set_postfix(loss=loss.item())
         print(f'第{epoch + 1}次循环:')
 
         # 训练损失统计
@@ -205,11 +235,11 @@ def train_net(model, lr, num_epochs, train_loader, val_loader):
 
         # 验证准确率统计+采用最简单的早停机制控制过拟合
         verify_acc = verify_net(model, val_loader)
-        if last_val_acc > verify_acc:
-            break
-        else:
-            last_val_acc = verify_acc
-            list_val_acc.append(verify_acc)
+        # if last_val_acc > verify_acc:
+        #     break
+        # else:
+        #     last_val_acc = verify_acc
+        #     list_val_acc.append(verify_acc)
 
     return model, list_train_acc, list_val_acc, list_train_loss
 
@@ -219,11 +249,26 @@ def plot_confusion_matrix(model, test_loader, class_names):
     model.eval()
     all_preds = []
     all_labels = []
+    # with torch.no_grad():
+    #     for inputs, labels in test_loader:
+    #         inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
+    #         outputs = model(inputs)
+    #         _, predicted = torch.max(outputs, 1)
+    #         all_preds.extend(predicted.cpu().numpy())
+    #         all_labels.extend(labels.cpu().numpy())
     with torch.no_grad():
-        for inputs, labels in test_loader:
+        progress_bar = tqdm(
+            test_loader,
+            desc="Testing",
+            leave=False
+        )
+
+        for inputs, labels in progress_bar:
             inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
+
             outputs = model(inputs)
             _, predicted = torch.max(outputs, 1)
+
             all_preds.extend(predicted.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
 
@@ -245,7 +290,7 @@ def test_net(model, test_loader, test_dataset):
 def main():
     # 数据导入
     print("数据开始导入。。。")
-    data_class = data_load("data/Animals-10")
+    data_class = data_load("Animals-10")
     train_loader = data_class["train_loader"]
     test_dataset = data_class["test_dataset"]
     val_loader = data_class["val_loader"]
@@ -254,13 +299,13 @@ def main():
 
     # 模型
     num_classes = 10
-    model = CNN(num_classes).to(DEVICE)
+    model = ResNetClassifier(num_classes).to(DEVICE)
 
     # 训练+验证
     print("训练开始。。。")
     # train_net(model, lr, num_epochs, train_loader, val_loader)
     # return model, list_train_acc, list_val_acc
-    trained_model, list_train_acc, list_val_acc, list_train_loss = train_net(model, 0.1, 10, train_loader, val_loader)
+    trained_model, list_train_acc, list_val_acc, list_train_loss = train_net(model, 0.1, 5, train_loader, val_loader)
     print("训练结束!\n")
 
     # 绘图
