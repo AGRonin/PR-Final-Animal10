@@ -10,6 +10,12 @@ from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from torchvision import models
 from tqdm import tqdm
 from torchvision.models import resnet50, ResNet50_Weights
+import os
+
+MODEL_DIR = "checkpoints"
+BEST_MODEL_PATH = os.path.join(MODEL_DIR, "best_resnet50.pth")
+
+os.makedirs(MODEL_DIR, exist_ok=True)
 
 # 自动检测计算设备
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -85,7 +91,7 @@ def data_load(root):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    batch_size=128
+    batch_size=32
 
     train_dataset = AnimalsDataset(root=root, split="train", transform=train_transform)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -126,8 +132,8 @@ class ResNetClassifier(nn.Module):
         super(ResNetClassifier, self).__init__()
 
         # 使用最新 torchvision 权重接口
-        weights = ResNet50_Weights.DEFAULT
-        self.backbone = resnet50(weights=weights)
+        # weights = ResNet50_Weights.DEFAULT
+        self.backbone = resnet50(weights=None)
 
         # 替换分类头
         in_features = self.backbone.fc.in_features  # 2048
@@ -182,11 +188,12 @@ def verify_net(model, val_loader):
 # 训练过程
 def train_net(model, lr, num_epochs, train_loader, val_loader):
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    optimizer = torch.optim.SGD(model.parameters(),lr=lr,momentum=0.9,weight_decay=1e-4)
     list_train_loss = []
     list_train_acc = []
     list_val_acc = []
     last_val_acc = 0
+    best_val_acc = 0
     for epoch in range(num_epochs):
         # 训练过程
         model.train()
@@ -240,6 +247,17 @@ def train_net(model, lr, num_epochs, train_loader, val_loader):
         # else:
         #     last_val_acc = verify_acc
         #     list_val_acc.append(verify_acc)
+
+        if (epoch + 1) % 5 == 0:
+            if verify_acc > best_val_acc:
+                best_val_acc = verify_acc
+                torch.save({
+                    "epoch": epoch + 1,
+                    "model_state_dict": model.state_dict(),
+                    "val_acc": best_val_acc
+                }, BEST_MODEL_PATH)
+
+                print(f"保存最佳模型（epoch {epoch + 1}, val_acc={best_val_acc:.4f}）")
 
     return model, list_train_acc, list_val_acc, list_train_loss
 
@@ -301,21 +319,30 @@ def main():
     num_classes = 10
     model = ResNetClassifier(num_classes).to(DEVICE)
 
-    # 训练+验证
-    print("训练开始。。。")
-    # train_net(model, lr, num_epochs, train_loader, val_loader)
-    # return model, list_train_acc, list_val_acc
-    trained_model, list_train_acc, list_val_acc, list_train_loss = train_net(model, 0.1, 5, train_loader, val_loader)
-    print("训练结束!\n")
+    if os.path.exists(BEST_MODEL_PATH):
+        print("检测到已存在最佳模型，直接加载并测试")
 
-    # 绘图
-    # draw_train_plot(list_train_acc, list_val_acc, list_train_loss)
-    draw_train_plot(list_train_acc, list_val_acc, list_train_loss)
+        checkpoint = torch.load(BEST_MODEL_PATH, map_location=DEVICE)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        print(f"加载模型来自 epoch {checkpoint['epoch']}，val_acc={checkpoint['val_acc']:.4f}")
+
+    else:
+        print("训练开始。。。")
+        model, list_train_acc, list_val_acc, list_train_loss = train_net(
+            model,
+            lr=0.01,
+            num_epochs=100,
+            train_loader=train_loader,
+            val_loader=val_loader
+        )
+        # 绘图
+        draw_train_plot(list_train_acc, list_val_acc, list_train_loss)
+        print("训练结束!\n")
 
     # 测试
     print("测试开始。。。")
     # test_net(model, test_loader, test_dataset)
-    test_net(trained_model, test_loader, test_dataset)
+    test_net(model, test_loader, test_dataset)
     print("测试结束！\n")
     return 0
 
