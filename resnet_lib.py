@@ -9,11 +9,11 @@ from PIL import Image
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from torchvision import models
 from tqdm import tqdm
-from torchvision.models import resnet50, ResNet50_Weights
+from torchvision.models import resnet18
 import os
 
 MODEL_DIR = "checkpoints"
-BEST_MODEL_PATH = os.path.join(MODEL_DIR, "best_resnet50.pth")
+BEST_MODEL_PATH = os.path.join(MODEL_DIR, "best_resnet18.pth")
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 
@@ -46,17 +46,17 @@ class AnimalsDataset(Dataset):
         # 筛选对应的数据集 (train/val/test)
         df = df[df["split"] == self.split].reset_index(drop=True)
         #====== 子采样：每个类别最多取 N 张（仅用于训练集） ======
-        if self.split == "train":
-            max_per_class = 200
-
-            df = (
-                df.groupby("label", group_keys=False)
-                  .apply(lambda x: x.sample(
-                      n=min(len(x), max_per_class),
-                      random_state=42
-                  ))
-                  .reset_index(drop=True)
-        )
+        # if self.split == "train":
+        #     max_per_class = 200
+        #
+        #     df = (
+        #         df.groupby("label", group_keys=False)
+        #           .apply(lambda x: x.sample(
+        #               n=min(len(x), max_per_class),
+        #               random_state=42
+        #           ))
+        #           .reset_index(drop=True)
+        # )
         self.paths = [self.root / p for p in df["path"].tolist()]
         self.labels = [self.classes_to_idx[c] for c in df["label"].tolist()]
 
@@ -80,6 +80,7 @@ def data_load(root):
     train_transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.RandomHorizontalFlip(),  # 水平翻转数据增强
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
         transforms.ToTensor(),  # 转为 Tensor 并归一化至 [0, 1]
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -131,12 +132,10 @@ class ResNetClassifier(nn.Module):
     def __init__(self, num_classes):
         super(ResNetClassifier, self).__init__()
 
-        # 使用最新 torchvision 权重接口
-        # weights = ResNet50_Weights.DEFAULT
-        self.backbone = resnet50(weights=None)
+        self.backbone = resnet18(weights=None)
 
         # 替换分类头
-        in_features = self.backbone.fc.in_features  # 2048
+        in_features = self.backbone.fc.in_features
         self.backbone.fc = nn.Linear(in_features, num_classes)
 
     def forward(self, x):
@@ -144,12 +143,17 @@ class ResNetClassifier(nn.Module):
 
 
 # 准确率评估
-def evaluate(model, dataloader):
+def evaluate(model, dataloader,epoch,num_epochs):
     model.eval()
     correct_count = 0
     total_count = 0
     with torch.no_grad():
-        for images, labels in dataloader:
+        progress_bar = tqdm(
+            dataloader,
+            desc=f"Epoch [{epoch + 1}/{num_epochs}]",
+            leave=False
+        )
+        for images, labels in progress_bar:
             images, labels = images.to(DEVICE), labels.to(DEVICE)
             logits = model(images)
             predicted = logits.argmax(dim=1)
@@ -179,21 +183,23 @@ def draw_train_plot(list_train_acc, list_val_acc, list_train_loss):
 
 
 # 验证过程
-def verify_net(model, val_loader):
-    acc = evaluate(model, val_loader)
+def verify_net(model, val_loader,epoch,num_epochs):
+    acc = evaluate(model, val_loader,epoch,num_epochs)
     print(f"验证集准确率为{acc}")
     return acc
 
 
 # 训练过程
-def train_net(model, lr, num_epochs, train_loader, val_loader):
+def train_net(model, lr, num_epochs, train_loader, val_loader,patience=10):
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(),lr=lr,momentum=0.9,weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size=40, gamma=0.1)
     list_train_loss = []
     list_train_acc = []
     list_val_acc = []
     last_val_acc = 0
     best_val_acc = 0
+    early_stop_counter = 0
     for epoch in range(num_epochs):
         # 训练过程
         model.train()
@@ -215,6 +221,9 @@ def train_net(model, lr, num_epochs, train_loader, val_loader):
             leave=False
         )
 
+        correct_train = 0
+        total_train = 0
+
         for images, labels in progress_bar:
             images, labels = images.to(DEVICE), labels.to(DEVICE)
 
@@ -225,10 +234,15 @@ def train_net(model, lr, num_epochs, train_loader, val_loader):
             loss.backward()
             optimizer.step()
 
+            preds = logits.argmax(dim=1)
+            correct_train += (preds == labels).sum().item()
+            total_train += labels.size(0)
             total_loss += loss.item()
 
             progress_bar.set_postfix(loss=loss.item())
         print(f'第{epoch + 1}次循环:')
+        current_lr = optimizer.param_groups[0]["lr"]
+        print(f"\t当前学习率: {current_lr:.6f}")
 
         # 训练损失统计
         avg_loss = total_loss / len(train_loader)
@@ -236,28 +250,37 @@ def train_net(model, lr, num_epochs, train_loader, val_loader):
         print(f"\t训练平均loss为{avg_loss}")
 
         # 训练准确率统计
-        train_acc = evaluate(model, train_loader)
+        train_acc = correct_train / total_train
         list_train_acc.append(train_acc)
         print(f'\t训练正确率为{train_acc}')
 
         # 验证准确率统计+采用最简单的早停机制控制过拟合
-        verify_acc = verify_net(model, val_loader)
+        verify_acc = verify_net(model, val_loader,epoch,num_epochs)
+        list_val_acc.append(verify_acc)
         # if last_val_acc > verify_acc:
         #     break
         # else:
         #     last_val_acc = verify_acc
         #     list_val_acc.append(verify_acc)
 
-        if (epoch + 1) % 5 == 0:
-            if verify_acc > best_val_acc:
-                best_val_acc = verify_acc
-                torch.save({
-                    "epoch": epoch + 1,
-                    "model_state_dict": model.state_dict(),
-                    "val_acc": best_val_acc
-                }, BEST_MODEL_PATH)
+        if verify_acc > best_val_acc:
+            best_val_acc = verify_acc
+            early_stop_counter=0
+            torch.save({
+                "epoch": epoch + 1,
+                "model_state_dict": model.state_dict(),
+                "val_acc": best_val_acc
+            }, BEST_MODEL_PATH)
 
-                print(f"保存最佳模型（epoch {epoch + 1}, val_acc={best_val_acc:.4f}）")
+            print(f"\t保存最佳模型（epoch {epoch + 1}, val_acc={best_val_acc:.4f}）")
+        else:
+            early_stop_counter+=1
+            print(f"\t验证集未提升，EarlyStopping计数: {early_stop_counter}/{patience}")
+            if early_stop_counter >= patience:
+                print(f"\n早停触发：连续 {patience} 个 epoch 验证集未提升，停止训练")
+                break
+
+        scheduler.step()
 
     return model, list_train_acc, list_val_acc, list_train_loss
 
@@ -300,7 +323,7 @@ def plot_confusion_matrix(model, test_loader, class_names):
 
 # 测试
 def test_net(model, test_loader, test_dataset):
-    acc = evaluate(model, test_loader)
+    acc = evaluate(model, test_loader,0,1)
     print(f"测试集准确率为{acc}")
     plot_confusion_matrix(model, test_loader, class_names=test_dataset.classes)
 
@@ -330,10 +353,11 @@ def main():
         print("训练开始。。。")
         model, list_train_acc, list_val_acc, list_train_loss = train_net(
             model,
-            lr=0.01,
+            lr=0.1,
             num_epochs=100,
             train_loader=train_loader,
-            val_loader=val_loader
+            val_loader=val_loader,
+            patience=10
         )
         # 绘图
         draw_train_plot(list_train_acc, list_val_acc, list_train_loss)
