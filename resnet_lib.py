@@ -11,15 +11,59 @@ from torchvision import models
 from tqdm import tqdm
 from torchvision.models import resnet18
 import os
+import sys
+import logging
 
-MODEL_DIR = "checkpoints"
+MODEL_DIR = "checkpoints_resnet_lib"
 BEST_MODEL_PATH = os.path.join(MODEL_DIR, "best_resnet18.pth")
 
 os.makedirs(MODEL_DIR, exist_ok=True)
+os.makedirs("output_resnet_lib", exist_ok=True)
 
 # 自动检测计算设备
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"当前使用的计算设备: {DEVICE}")
+
+# ================= 日志系统（不影响 tqdm） =================
+LOG_PATH = os.path.join("output_resnet_lib", "train.log")
+
+logger = logging.getLogger("train_logger")
+logger.setLevel(logging.INFO)
+
+# 文件日志
+file_handler = logging.FileHandler(LOG_PATH, mode="a", encoding="utf-8")
+file_handler.setLevel(logging.INFO)
+
+# 控制台日志
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+
+formatter = logging.Formatter(
+    "%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+file_handler.setFormatter(formatter)
+console_handler.setFormatter(formatter)
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+
+# 重定向 print → logger（tqdm 不受影响）
+class PrintLogger:
+    def write(self, message):
+        message = message.strip()
+        if message:
+            logger.info(message)
+
+    def flush(self):
+        pass
+
+
+sys.stdout = PrintLogger()
+# ============================================================
+
 
 
 # 数据导入类设计
@@ -178,7 +222,7 @@ def draw_train_plot(list_train_acc, list_val_acc, list_train_loss):
     plt.ylabel('Accuracy')
     plt.legend()
 
-    plt.savefig('output/training_curves.png')
+    plt.savefig('output_resnet_lib/training_curves.png')
     plt.show()
 
 
@@ -317,7 +361,7 @@ def plot_confusion_matrix(model, test_loader, class_names):
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_names)
     disp.plot(cmap=plt.cm.Blues)
     plt.title("Confusion Matrix")
-    plt.savefig("output/confusion_matrix.png")
+    plt.savefig("output_resnet_lib/confusion_matrix.png")
     plt.show()
 
 
