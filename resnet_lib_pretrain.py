@@ -14,18 +14,18 @@ import os
 import sys
 import logging
 
-MODEL_DIR = "checkpoints_pretrain"
+MODEL_DIR = "checkpoints_resnet_pretrain"
 BEST_MODEL_PATH = os.path.join(MODEL_DIR, "best_resnet18.pth")
 
 os.makedirs(MODEL_DIR, exist_ok=True)
-os.makedirs("output_pretrain", exist_ok=True)
+os.makedirs("output_resnet_pretrain", exist_ok=True)
 
 # 自动检测计算设备
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"当前使用的计算设备: {DEVICE}")
 
 # ================= 日志系统（不影响 tqdm） =================
-LOG_PATH = os.path.join("output_pretrain", "train.log")
+LOG_PATH = os.path.join("output_resnet_pretrain", "train.log")
 
 logger = logging.getLogger("train_logger")
 logger.setLevel(logging.INFO)
@@ -221,7 +221,7 @@ def draw_train_plot(list_train_acc, list_val_acc, list_train_loss):
     plt.ylabel('Accuracy')
     plt.legend()
 
-    plt.savefig('output_pretrain/training_curves.png')
+    plt.savefig('output_resnet_pretrain/training_curves.png')
     plt.show()
 
 
@@ -360,7 +360,7 @@ def plot_confusion_matrix(model, test_loader, class_names):
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_names)
     disp.plot(cmap=plt.cm.Blues)
     plt.title("Confusion Matrix")
-    plt.savefig("output_pretrain/confusion_matrix.png")
+    plt.savefig("output_resnet_pretrain/confusion_matrix.png")
     plt.show()
 
 
