@@ -1,7 +1,7 @@
-import torch
-import clip
 import os
+import torch
 from torch import nn
+from torch.optim.lr_scheduler import CosineAnnealingLR
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
@@ -26,7 +26,6 @@ class AnimalsDataset(Dataset):
         self.root = Path(root)
         self.split = split
         self.transform = transform
-
         # 读取 CSV 分割文件
         df = pd.read_csv(self.root / "train_test_val_split.csv")
         df["path"] = df["path"].astype(str)
@@ -35,6 +34,8 @@ class AnimalsDataset(Dataset):
         self.classes = ["dog", "horse", "elephant", "butterfly",
                         "chicken", "cat", "cow", "sheep", "spider", "squirrel"]
         self.classes_to_idx = {c: i for i, c in enumerate(self.classes)}
+
+        # 筛选对应的数据集 (train/val/test)
         df = df[df["split"] == self.split].reset_index(drop=True)
         if self.split == "train":
             max_per_class = 600   
@@ -49,6 +50,7 @@ class AnimalsDataset(Dataset):
         )
         self.paths = [self.root / p for p in df["path"].tolist()]
         self.labels = [self.classes_to_idx[c] for c in df["label"].tolist()]
+
     def __len__(self):
         return len(self.paths)
 
@@ -68,7 +70,10 @@ class AnimalsDataset(Dataset):
 def data_load(root):
     train_transform = transforms.Compose([
         transforms.Resize((224, 224)),
-        transforms.RandomHorizontalFlip(),  # 水平翻转数据增强
+        #transforms.RandomHorizontalFlip(),  # 水平翻转数据增强
+        transforms.RandomRotation(15),   # 随机旋转15度以内
+        #随机调整图像的亮度、对比度、饱和度和色调
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1), # 颜色抖动
         transforms.ToTensor(),  # 转为 Tensor 并归一化至 [0, 1]
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -79,7 +84,7 @@ def data_load(root):
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
-
+    #每次送入的数据样本量
     batch_size=128
 
     train_dataset = AnimalsDataset(root=root, split="train", transform=train_transform)
@@ -94,6 +99,7 @@ def data_load(root):
     for label in train_dataset.labels:
         class_counts[label] += 1
     class_weights = [1.0/count if count > 0 else 0.0 for count in class_counts]
+    # 为了更好地处理类别不平衡问题，使用加权采样器
     sample_weights = [class_weights[label] for label in train_dataset.labels]
     sampler = torch.utils.data.WeightedRandomSampler(sample_weights, len(sample_weights), replacement=True)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
@@ -109,30 +115,39 @@ def data_load(root):
     return data_class
 
 
-class CLIPClassifier(nn.Module):
+class CNN(nn.Module):
     def __init__(self, num_classes):
-        super(CLIPClassifier, self).__init__()
-
-        # 加载 CLIP
-        self.clip_model, _ = clip.load("ViT-B/32", device=DEVICE)
-
-        # 冻结全部参数
-        for param in self.clip_model.parameters():
-            param.requires_grad = False
-
-        # 👉 只解冻 visual 的最后一个 transformer block（非常轻量）
-        for param in self.clip_model.visual.transformer.resblocks[-1].parameters():
-            param.requires_grad = True
-
-        # 分类头
-        self.classifier = nn.Linear(512, num_classes)
+        super().__init__()
+        # 1. 特征提取网络 (Backbone)
+        self.features = nn.Sequential(
+            # Block 1
+            nn.Conv2d(3, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(True),nn.MaxPool2d(2),
+            # Block 2
+            nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(True), nn.MaxPool2d(2),
+            # Block 3
+            nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(True), nn.MaxPool2d(2),
+            # Block 4
+            nn.Conv2d(128, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(True), nn.MaxPool2d(2),
+            # Block 5
+            nn.Conv2d(256, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),nn.MaxPool2d(2),
+            nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),nn.MaxPool2d(2),
+            # Global Average Pooling: 无论输入尺寸如何，输出特征图均为 1x1
+            nn.AdaptiveAvgPool2d((1, 1)), 
+        )
+        
+        # 2. 分类器 (Head)
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(512, 128),
+            nn.ReLU(True),
+            nn.Dropout(0.2), # dropout 随机让部分神经元失活，防止过拟合
+            nn.Linear(128, num_classes),
+        )
 
     def forward(self, x):
-        # 不再使用 no_grad（因为我们解冻了最后一层）
-        image_features = self.clip_model.encode_image(x)
-
-        logits = self.classifier(image_features)
-        return logits
+        x = self.features(x)
+        x = self.classifier(x)
+        return x
 
 
 # 准确率评估
@@ -144,6 +159,7 @@ def evaluate(model, dataloader):
         for images, labels in dataloader:
             images, labels = images.to(DEVICE), labels.to(DEVICE)
             logits = model(images)
+            #每行选出分数最大的索引
             predicted = logits.argmax(dim=1)
             total_count += labels.numel()
             correct_count += (predicted == labels).sum().item()
@@ -166,7 +182,7 @@ def draw_train_plot(list_train_acc, list_val_acc, list_train_loss):
     plt.ylabel('Accuracy')
     plt.legend()
 
-    plt.savefig('output_clip/training_curves.png')
+    plt.savefig('output_cnn/training_curves.png')
     plt.show()
 
 
@@ -178,27 +194,38 @@ def verify_net(model, val_loader):
 
 
 # 训练过程
-def train_net(model, lr, num_epochs, train_loader, val_loader):
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+def train_net(model, lr, num_epochs, train_loader, val_loader,class_weights):
+    weights_tensor = torch.tensor(class_weights).to(DEVICE)
+    #定义损失函数(引入了权重处理类别不均衡的问题)
+    criterion = nn.CrossEntropyLoss(weight=weights_tensor)
+    #定义优化器
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    #余弦退火学习率调整
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
+    #每轮训练的平均损失
     list_train_loss = []
+    #训练集准确率
     list_train_acc = []
+    #验证集准确率
     list_val_acc = []
     last_val_acc = 0
+
     best_val_acc = 0.0
     for epoch in range(num_epochs):
         # 训练过程
         model.train()
         total_loss = 0.0
         for images, labels in train_loader:
+            images, labels = images.to(DEVICE), labels.to(DEVICE)
             # 前向传播
             logits = model(images)
             # 误差计算
             loss = criterion(logits, labels)
-            # 反向传播和参数更新
+            #先将梯度清零，再反向传播，最后更新参数
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            #累加损失
             total_loss += loss.item()
         print(f'第{epoch + 1}次循环:')
 
@@ -221,8 +248,8 @@ def train_net(model, lr, num_epochs, train_loader, val_loader):
             list_val_acc.append(verify_acc)
         if verify_acc > best_val_acc:
             best_val_acc = verify_acc
-            torch.save(model.state_dict(), 'best_model_clip.pth')
-
+            torch.save(model.state_dict(), 'best_model_cnn.pth')
+        scheduler.step()
     return model, list_train_acc, list_val_acc, list_train_loss
 
 
@@ -243,7 +270,7 @@ def plot_confusion_matrix(model, test_loader, class_names):
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_names)
     disp.plot(cmap=plt.cm.Blues)
     plt.title("Confusion Matrix")
-    plt.savefig("output_clip/confusion_matrix.png")
+    plt.savefig("output_cnn/confusion_matrix.png")
     plt.show()
 
 
@@ -262,17 +289,13 @@ def main():
     test_dataset = data_class["test_dataset"]
     val_loader = data_class["val_loader"]
     test_loader = data_class["test_loader"]
+    class_weights = data_class["class_weights"]
     print("数据导入成功！\n")
 
     # 模型
     num_classes = 10
-    model = CLIPClassifier(num_classes).to(DEVICE)
-    best_model_path = "best_model_clip.pth"
-    # 训练+验证
-    # train_net(model, lr, num_epochs, train_loader, val_loader)
-    # return model, list_train_acc, list_val_acc
-    #trained_model, list_train_acc, list_val_acc, list_train_loss = train_net(model, 1e-4, 2, train_loader, val_loader)
-    #print("训练结束!\n")
+    model = CNN(num_classes).to(DEVICE)
+    best_model_path = "best_model_cnn.pth"
     if os.path.exists(best_model_path):
         print(f"检测到已有最佳模型: {best_model_path}，直接加载跳过训练")
         model.load_state_dict(torch.load(best_model_path))
@@ -280,22 +303,20 @@ def main():
         list_train_acc, list_val_acc, list_train_loss = [], [], []
     else:
         print("训练开始。。。")
-        model, list_train_acc, list_val_acc, list_train_loss = train_net(model, 1e-4,10 , train_loader, val_loader)
+        model, list_train_acc, list_val_acc, list_train_loss = train_net(model, 0.01, 100, train_loader, val_loader,class_weights = class_weights)
         model.load_state_dict(torch.load(best_model_path))
         model.to(DEVICE)
         print("训练结束!\n")
+    # 训练+验证
     # 绘图
-    # draw_train_plot(list_train_acc, list_val_acc, list_train_loss)
     draw_train_plot(list_train_acc, list_val_acc, list_train_loss)
-
     # 测试
     print("测试开始。。。")
-    # test_net(model, test_loader, test_dataset)
     test_net(model, test_loader, test_dataset)
     print("测试结束！\n")
     return 0
 
 
 if __name__ == "__main__":
-    os.makedirs("output_clip", exist_ok=True)
+    os.makedirs("output_cnn", exist_ok=True)
     main()
