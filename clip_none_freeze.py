@@ -80,7 +80,7 @@ def data_load(root):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    batch_size=128
+    batch_size=32
 
     train_dataset = AnimalsDataset(root=root, split="train", transform=train_transform)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -115,22 +115,13 @@ class CLIPClassifier(nn.Module):
 
         # 加载 CLIP
         self.clip_model, _ = clip.load("ViT-B/32", device=DEVICE)
-
-        # 冻结全部参数
-        for param in self.clip_model.parameters():
-            param.requires_grad = False
-
-        # 👉 只解冻 visual 的最后一个 transformer block（非常轻量）
-        for param in self.clip_model.visual.transformer.resblocks[-1].parameters():
-            param.requires_grad = True
-
         # 分类头
         self.classifier = nn.Linear(512, num_classes)
 
     def forward(self, x):
         # 不再使用 no_grad（因为我们解冻了最后一层）
         image_features = self.clip_model.encode_image(x)
-
+        image_features = image_features.float()  # 统一 dtype
         logits = self.classifier(image_features)
         return logits
 
@@ -166,7 +157,7 @@ def draw_train_plot(list_train_acc, list_val_acc, list_train_loss):
     plt.ylabel('Accuracy')
     plt.legend()
 
-    plt.savefig('output_clip/training_curves.png')
+    plt.savefig('output_clip_none_freeze/training_curves.png')
     plt.show()
 
 
@@ -191,6 +182,8 @@ def train_net(model, lr, num_epochs, train_loader, val_loader):
         model.train()
         total_loss = 0.0
         for images, labels in train_loader:
+            images = images.to(DEVICE)
+            labels = labels.to(DEVICE)
             # 前向传播
             logits = model(images)
             # 误差计算
@@ -221,7 +214,7 @@ def train_net(model, lr, num_epochs, train_loader, val_loader):
             list_val_acc.append(verify_acc)
         if verify_acc > best_val_acc:
             best_val_acc = verify_acc
-            torch.save(model.state_dict(), 'best_model_clip.pth')
+            torch.save(model.state_dict(), 'best_model_clip_none_freeze.pth')
 
     return model, list_train_acc, list_val_acc, list_train_loss
 
@@ -243,7 +236,7 @@ def plot_confusion_matrix(model, test_loader, class_names):
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_names)
     disp.plot(cmap=plt.cm.Blues)
     plt.title("Confusion Matrix")
-    plt.savefig("output_clip/confusion_matrix.png")
+    plt.savefig("output_clip_none_freeze/confusion_matrix.png")
     plt.show()
 
 
@@ -267,7 +260,7 @@ def main():
     # 模型
     num_classes = 10
     model = CLIPClassifier(num_classes).to(DEVICE)
-    best_model_path = "best_model_clip.pth"
+    best_model_path = "best_model_clip_none_freeze.pth"
     # 训练+验证
     # train_net(model, lr, num_epochs, train_loader, val_loader)
     # return model, list_train_acc, list_val_acc
@@ -297,5 +290,5 @@ def main():
 
 
 if __name__ == "__main__":
-    os.makedirs("output_clip", exist_ok=True)
+    os.makedirs("output_clip_none_freeze", exist_ok=True)
     main()

@@ -1,5 +1,7 @@
 import os
 import copy
+import sys
+import logging
 import torch
 from torch import nn
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -15,7 +17,43 @@ from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"当前使用的计算设备: {DEVICE}")
 
+#日志
+LOG_PATH = os.path.join("output_cnn_weight", "train.log")
+logger = logging.getLogger("train_logger")
+logger.setLevel(logging.INFO)
 
+# 文件日志
+file_handler = logging.FileHandler(LOG_PATH, mode="a", encoding="utf-8")
+file_handler.setLevel(logging.INFO)
+
+# 控制台日志
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+
+formatter = logging.Formatter(
+    "%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+file_handler.setFormatter(formatter)
+console_handler.setFormatter(formatter)
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+
+# 重定向 print → logger（tqdm 不受影响）
+class PrintLogger:
+    def write(self, message):
+        message = message.strip()
+        if message:
+            logger.info(message)
+
+    def flush(self):
+        pass
+
+
+sys.stdout = PrintLogger()
 # 数据导入类设计
 class AnimalsDataset(Dataset):
     def __init__(self, root: str, split: str, transform: transforms.Compose = None):
