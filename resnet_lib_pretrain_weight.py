@@ -11,15 +11,59 @@ from torchvision import models
 from tqdm import tqdm
 from torchvision.models import resnet18
 import os
+import math
+import sys
+import logging
 
 MODEL_DIR = "checkpoints_pretrain_weight"
 BEST_MODEL_PATH = os.path.join(MODEL_DIR, "best_resnet18.pth")
 
 os.makedirs(MODEL_DIR, exist_ok=True)
+os.makedirs("output_pretrain_weight", exist_ok=True)
 
 # 自动检测计算设备
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"当前使用的计算设备: {DEVICE}")
+
+# ================= 日志系统（不影响 tqdm） =================
+LOG_PATH = os.path.join("output_pretrain_weight", "train.log")
+
+logger = logging.getLogger("train_logger")
+logger.setLevel(logging.INFO)
+
+# 文件日志
+file_handler = logging.FileHandler(LOG_PATH, mode="a", encoding="utf-8")
+file_handler.setLevel(logging.INFO)
+
+# 控制台日志
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+
+formatter = logging.Formatter(
+    "%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+file_handler.setFormatter(formatter)
+console_handler.setFormatter(formatter)
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+
+# 重定向 print → logger（tqdm 不受影响）
+class PrintLogger:
+    def write(self, message):
+        message = message.strip()
+        if message:
+            logger.info(message)
+
+    def flush(self):
+        pass
+
+
+sys.stdout = PrintLogger()
+# ============================================================
 
 
 # 数据导入类设计
@@ -98,14 +142,14 @@ def data_load(root):
     val_dataset = AnimalsDataset(root=root, split="val", transform=val_test_transform)
     test_dataset = AnimalsDataset(root=root, split="test", transform=val_test_transform)
 
-    # ======== 【新增】统计训练集各类别样本数 ========
+    # 统计训练集各类别样本数
     class_counts = [0] * len(train_dataset.classes)
     for label in train_dataset.labels:
         class_counts[label] += 1
     print("训练集各类别样本数:", class_counts)
 
     # 类别权重（样本数倒数）
-    class_weights = [1.0 / c if c > 0 else 0.0 for c in class_counts]
+    class_weights = [1.0 / math.log(c) if c > 1 else 0.0 for c in class_counts]
 
     # 每个样本的采样权重
     sample_weights = [class_weights[label] for label in train_dataset.labels]
@@ -203,12 +247,12 @@ def verify_net(model, val_loader, epoch, num_epochs):
 
 # 训练过程
 def train_net(model, lr, num_epochs, train_loader, val_loader, class_weights, patience=10):
-    # ======== 【修改】带类别权重的交叉熵 ========
+    # 带类别权重的交叉熵
     weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(DEVICE)
     criterion = nn.CrossEntropyLoss(weight=weights_tensor)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=40, gamma=0.1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
 
     list_train_loss = []
     list_train_acc = []
@@ -341,7 +385,7 @@ def main():
         model, list_train_acc, list_val_acc, list_train_loss = train_net(
             model,
             lr=0.1,
-            num_epochs=100,
+            num_epochs=50,
             train_loader=train_loader,
             val_loader=val_loader,
             class_weights=class_weights,
