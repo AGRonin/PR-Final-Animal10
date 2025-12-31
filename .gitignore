@@ -4,6 +4,15 @@ Animals-10/
 # macOS
 .DS_Store
 
+# VSCode
+.vscode/
+
+# PyCharm
+.idea/
+
+# modle
+*.pth
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
