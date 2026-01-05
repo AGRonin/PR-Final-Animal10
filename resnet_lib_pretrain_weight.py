@@ -25,9 +25,8 @@ os.makedirs("output_resnet_pretrain_weight", exist_ok=True)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"当前使用的计算设备: {DEVICE}")
 
-# ================= 日志系统（不影响 tqdm） =================
+# 日志系统
 LOG_PATH = os.path.join("output_resnet_pretrain_weight", "train.log")
-
 logger = logging.getLogger("train_logger")
 logger.setLevel(logging.INFO)
 
@@ -50,8 +49,7 @@ console_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
-
-# 重定向 print → logger（tqdm 不受影响）
+# 重定向 print → logger
 class PrintLogger:
     def write(self, message):
         message = message.strip()
@@ -61,9 +59,7 @@ class PrintLogger:
     def flush(self):
         pass
 
-
 sys.stdout = PrintLogger()
-# ============================================================
 
 
 # 数据导入类设计
@@ -87,9 +83,9 @@ class AnimalsDataset(Dataset):
                         "chicken", "cat", "cow", "sheep", "spider", "squirrel"]
         self.classes_to_idx = {c: i for i, c in enumerate(self.classes)}
 
-        # 筛选对应的数据集 (train/val/test)
+        # 筛选对应的数据集
         df = df[df["split"] == self.split].reset_index(drop=True)
-        #====== 子采样：每个类别最多取 N 张（仅用于训练集） ======
+        # 子采样
         # if self.split == "train":
         #     max_per_class = 600
         #
@@ -110,7 +106,7 @@ class AnimalsDataset(Dataset):
     def __getitem__(self, idx):
         path = self.paths[idx]
         y = self.labels[idx]
-        # 必须转为 RGB，因为我们的部分输入图片是RGBA的png格式，直接读取会有四个通道
+        # 必须转为RGB，因为我们的部分输入图片是RGBA的png格式，直接读取会有四个通道
         img = Image.open(path).convert("RGB")
 
         if self.transform:
@@ -122,21 +118,21 @@ class AnimalsDataset(Dataset):
 # 数据导入函数
 def data_load(root):
     train_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.RandomHorizontalFlip(),  # 水平翻转数据增强
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-        transforms.ToTensor(),  # 转为 Tensor 并归一化至 [0, 1]
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Resize((224, 224)), #统一尺寸
+        transforms.RandomHorizontalFlip(),  # 以50%概率对图像做水平翻转，防止模型记住方向特征
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1), # 随机扰动图像的颜色属性，亮度对比度饱和度色度
+        transforms.ToTensor(), # 转为Tensor并归一化至[0,1]
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) # 对每个通道做标准化（Z-score）
     ])
 
-    # 验证/测试集预处理：严谨起见，不做随机增强，仅做标准化
+    # 验证、测试集预处理：仅做标准化
     val_test_transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    batch_size = 32
+    batch_size=32
 
     train_dataset = AnimalsDataset(root=root, split="train", transform=train_transform)
     val_dataset = AnimalsDataset(root=root, split="val", transform=val_test_transform)
@@ -148,27 +144,10 @@ def data_load(root):
         class_counts[label] += 1
     print("训练集各类别样本数:", class_counts)
 
-    # 类别权重（样本数倒数）
-    class_weights = [1.0 / math.log(c) if c > 1 else 0.0 for c in class_counts]
-
-    # 每个样本的采样权重
-    sample_weights = [class_weights[label] for label in train_dataset.labels]
-
-    # WeightedRandomSampler
-    sampler = torch.utils.data.WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(sample_weights),
-        replacement=True
-    )
-
-    # train_loader 使用 sampler
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        sampler=sampler,
-        shuffle=False
-    )
-
+    class_weights = [1.0 / math.log(c) if c > 1 else 0.0 for c in class_counts]  # 类别权重
+    sample_weights = [class_weights[label] for label in train_dataset.labels] # 采样权重
+    sampler = torch.utils.data.WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler, shuffle=False)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
@@ -183,28 +162,24 @@ def data_load(root):
     }
     return data_class
 
-
-# 使用ResNet深度神经网络
 class ResNetClassifier(nn.Module):
     def __init__(self, num_classes):
-        super(ResNetClassifier, self).__init__()
-
-        self.backbone = resnet18(weights=True)
+        super(ResNetClassifier, self).__init__() # 调用父类nn.Module的构造函数
+        self.backbone = resnet18(weights=True) # 创建一个ResNet18网络
 
         # 替换分类头
-        in_features = self.backbone.fc.in_features
-        self.backbone.fc = nn.Linear(in_features, num_classes)
+        in_features = self.backbone.fc.in_features # 读取ResNet18原始全连接层的输入特征维度
+        self.backbone.fc = nn.Linear(in_features, num_classes) # 用新的全连接层，替换原来ImageNet的1000类分类头
 
     def forward(self, x):
         return self.backbone(x)
 
-
 # 准确率评估
-def evaluate(model, dataloader, epoch, num_epochs):
+def evaluate(model, dataloader,epoch,num_epochs):
     model.eval()
     correct_count = 0
     total_count = 0
-    with torch.no_grad():
+    with torch.no_grad(): # 关闭梯度计算
         progress_bar = tqdm(
             dataloader,
             desc=f"Epoch [{epoch + 1}/{num_epochs}]",
@@ -212,7 +187,7 @@ def evaluate(model, dataloader, epoch, num_epochs):
         )
         for images, labels in progress_bar:
             images, labels = images.to(DEVICE), labels.to(DEVICE)
-            logits = model(images)
+            logits = model(images) # 前向传播得到未经过softmax的原始分类分数
             predicted = logits.argmax(dim=1)
             total_count += labels.numel()
             correct_count += (predicted == labels).sum().item()
@@ -220,6 +195,7 @@ def evaluate(model, dataloader, epoch, num_epochs):
 
 
 def draw_train_plot(list_train_acc, list_val_acc, list_train_loss):
+    # 绘制训练曲线
     plt.figure(figsize=(12, 6))
     plt.subplot(1, 2, 1)
     plt.plot(range(1, len(list_train_loss) + 1), list_train_loss, label='Train Loss')
@@ -239,50 +215,42 @@ def draw_train_plot(list_train_acc, list_val_acc, list_train_loss):
 
 
 # 验证过程
-def verify_net(model, val_loader, epoch, num_epochs):
-    acc = evaluate(model, val_loader, epoch, num_epochs)
+def verify_net(model, val_loader,epoch,num_epochs):
+    acc = evaluate(model, val_loader,epoch,num_epochs)
     print(f"验证集准确率为{acc}")
     return acc
 
 
 # 训练过程
 def train_net(model, lr, num_epochs, train_loader, val_loader, class_weights, patience=10):
-    # 带类别权重的交叉熵
-    weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(DEVICE)
-    criterion = nn.CrossEntropyLoss(weight=weights_tensor)
-
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
-
+    weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(DEVICE) #把列表形式的类别权重，转换PyTorch Tensor，用于损失函数加权
+    criterion = nn.CrossEntropyLoss(weight=weights_tensor)  # 带类别权重的交叉熵
+    optimizer = torch.optim.SGD(model.parameters(),lr=lr,momentum=0.9,weight_decay=1e-4) # 定义优化器
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size=20, gamma=0.1) # 学习率调度器
     list_train_loss = []
     list_train_acc = []
     list_val_acc = []
-
     best_val_acc = 0
     early_stop_counter = 0
-
     for epoch in range(num_epochs):
+        # 训练过程
         model.train()
         total_loss = 0.0
-
         progress_bar = tqdm(
             train_loader,
             desc=f"Epoch [{epoch + 1}/{num_epochs}]",
             leave=False
         )
-
         correct_train = 0
         total_train = 0
-
         for images, labels in progress_bar:
             images, labels = images.to(DEVICE), labels.to(DEVICE)
 
-            logits = model(images)
-            loss = criterion(logits, labels)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            logits = model(images) # 前向传播
+            loss = criterion(logits, labels) # 误差计算
+            optimizer.zero_grad() #梯度清零，否则梯度累加
+            loss.backward() # 反向传播
+            optimizer.step() # 参数更新
 
             preds = logits.argmax(dim=1)
             correct_train += (preds == labels).sum().item()
@@ -290,32 +258,36 @@ def train_net(model, lr, num_epochs, train_loader, val_loader, class_weights, pa
             total_loss += loss.item()
 
             progress_bar.set_postfix(loss=loss.item())
-
         print(f'第{epoch + 1}次循环:')
-        print(f"\t当前学习率: {optimizer.param_groups[0]['lr']:.6f}")
+        current_lr = optimizer.param_groups[0]["lr"]
+        print(f"\t当前学习率: {current_lr:.6f}")
 
+        # 训练损失统计
         avg_loss = total_loss / len(train_loader)
         list_train_loss.append(avg_loss)
         print(f"\t训练平均loss为{avg_loss}")
 
+        # 训练准确率统计
         train_acc = correct_train / total_train
         list_train_acc.append(train_acc)
         print(f'\t训练正确率为{train_acc}')
 
-        verify_acc = verify_net(model, val_loader, epoch, num_epochs)
+        # 验证准确率统计+采用最简单的早停机制控制过拟合
+        verify_acc = verify_net(model, val_loader,epoch,num_epochs)
         list_val_acc.append(verify_acc)
 
         if verify_acc > best_val_acc:
             best_val_acc = verify_acc
-            early_stop_counter = 0
+            early_stop_counter=0
             torch.save({
                 "epoch": epoch + 1,
                 "model_state_dict": model.state_dict(),
                 "val_acc": best_val_acc
             }, BEST_MODEL_PATH)
+
             print(f"\t保存最佳模型（epoch {epoch + 1}, val_acc={best_val_acc:.4f}）")
         else:
-            early_stop_counter += 1
+            early_stop_counter+=1
             print(f"\t验证集未提升，EarlyStopping计数: {early_stop_counter}/{patience}")
             if early_stop_counter >= patience:
                 print(f"\n早停触发：连续 {patience} 个 epoch 验证集未提升，停止训练")
@@ -331,7 +303,6 @@ def plot_confusion_matrix(model, test_loader, class_names):
     model.eval()
     all_preds = []
     all_labels = []
-
     with torch.no_grad():
         progress_bar = tqdm(
             test_loader,
@@ -344,7 +315,6 @@ def plot_confusion_matrix(model, test_loader, class_names):
             _, predicted = torch.max(outputs, 1)
             all_preds.extend(predicted.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
-
     cm = confusion_matrix(all_labels, all_preds)
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_names)
     disp.plot(cmap=plt.cm.Blues)
@@ -355,31 +325,32 @@ def plot_confusion_matrix(model, test_loader, class_names):
 
 # 测试
 def test_net(model, test_loader, test_dataset):
-    acc = evaluate(model, test_loader, 0, 1)
+    acc = evaluate(model, test_loader,0,1)
     print(f"测试集准确率为{acc}")
     plot_confusion_matrix(model, test_loader, class_names=test_dataset.classes)
 
-
 def main():
+    # 数据导入
     print("数据开始导入。。。")
     data_class = data_load("Animals-10")
-
     train_loader = data_class["train_loader"]
+    test_dataset = data_class["test_dataset"]
     val_loader = data_class["val_loader"]
     test_loader = data_class["test_loader"]
-    test_dataset = data_class["test_dataset"]
     class_weights = data_class["class_weights"]
-
     print("数据导入成功！\n")
 
+    # 模型
     num_classes = 10
     model = ResNetClassifier(num_classes).to(DEVICE)
 
     if os.path.exists(BEST_MODEL_PATH):
         print("检测到已存在最佳模型，直接加载并测试")
+
         checkpoint = torch.load(BEST_MODEL_PATH, map_location=DEVICE)
         model.load_state_dict(checkpoint["model_state_dict"])
         print(f"加载模型来自 epoch {checkpoint['epoch']}，val_acc={checkpoint['val_acc']:.4f}")
+
     else:
         print("训练开始。。。")
         model, list_train_acc, list_val_acc, list_train_loss = train_net(
@@ -391,12 +362,15 @@ def main():
             class_weights=class_weights,
             patience=10
         )
+        # 绘图
         draw_train_plot(list_train_acc, list_val_acc, list_train_loss)
         print("训练结束!\n")
 
+    # 测试
     print("测试开始。。。")
     test_net(model, test_loader, test_dataset)
     print("测试结束！\n")
+    return 0
 
 
 if __name__ == "__main__":
