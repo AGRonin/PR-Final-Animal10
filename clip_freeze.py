@@ -212,8 +212,8 @@ def train_net(model, lr, num_epochs, train_loader, val_loader):
         #if last_val_acc > verify_acc:
         #    continue
         #else:
-        #    last_val_acc = verify_acc
-        #    list_val_acc.append(verify_acc)
+        last_val_acc = verify_acc
+        list_val_acc.append(verify_acc)
         if verify_acc > best_val_acc:
             best_val_acc = verify_acc
             torch.save(model.state_dict(), 'best_model_clip_freeze.pth')

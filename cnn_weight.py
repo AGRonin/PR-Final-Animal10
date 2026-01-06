@@ -168,7 +168,7 @@ class CNN(nn.Module):
             nn.Flatten(),
             nn.Linear(512, 128),
             nn.ReLU(True),
-            nn.Dropout(0.2), # dropout 随机让部分神经元失活，防止过拟合
+            nn.Dropout(0.5), # dropout 随机让部分神经元失活，防止过拟合
             nn.Linear(128, num_classes),
         )
 
@@ -283,8 +283,8 @@ def train_net(model, ema_model, lr, num_epochs, train_loader, val_loader,class_w
         #if last_val_acc > verify_acc:
         #    continue
         #else:
-        #    last_val_acc = verify_acc
-        #    list_val_acc.append(verify_acc)
+        last_val_acc = verify_acc
+        list_val_acc.append(verify_acc)
         if verify_acc > best_val_acc:
             best_val_acc = verify_acc
             torch.save(model.state_dict(), 'best_model_cnn_w.pth')

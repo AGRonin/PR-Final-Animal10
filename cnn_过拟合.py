@@ -179,7 +179,7 @@ class CNN(nn.Module):
             #通过线性加权转为128维度
             nn.Linear(512, 128),
             nn.ReLU(True),
-            nn.Dropout(0.2), # dropout 随机让部分神经元失活，防止过拟合
+            nn.Dropout(0.5), # dropout 随机让部分神经元失活，防止过拟合
             #通过线性加权输出结果
             nn.Linear(128, num_classes),
         )
@@ -222,7 +222,7 @@ def draw_train_plot(list_train_acc, list_val_acc, list_train_loss):
     plt.ylabel('Accuracy')
     plt.legend()
 
-    plt.savefig('output_cnn/training_curves.png')
+    plt.savefig('output_cnn_overfitting/training_curves.png')
     plt.show()
 
 
@@ -289,7 +289,7 @@ def train_net(model, lr, num_epochs, train_loader, val_loader,class_weights):
         list_val_acc.append(verify_acc)
         if verify_acc > best_val_acc:
             best_val_acc = verify_acc
-            torch.save(model.state_dict(), 'best_model_cnn.pth')
+            torch.save(model.state_dict(), 'best_model_cnn_overfitting.pth')
         #更新学习率
         scheduler.step()
     return model, list_train_acc, list_val_acc, list_train_loss
@@ -312,7 +312,7 @@ def plot_confusion_matrix(model, test_loader, class_names):
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_names)
     disp.plot(cmap=plt.cm.Blues)
     plt.title("Confusion Matrix")
-    plt.savefig("output_cnn/confusion_matrix.png")
+    plt.savefig("output_cnn_overfitting/confusion_matrix.png")
     plt.show()
 
 
@@ -337,7 +337,7 @@ def main():
     # 模型
     num_classes = 10
     model = CNN(num_classes).to(DEVICE)
-    best_model_path = "best_model_cnn.pth"
+    best_model_path = "best_model_cnn_overfitting.pth"
     if os.path.exists(best_model_path):
         print(f"检测到已有最佳模型: {best_model_path}，直接加载跳过训练")
         model.load_state_dict(torch.load(best_model_path))
@@ -360,5 +360,5 @@ def main():
 
 
 if __name__ == "__main__":
-    os.makedirs("output_cnn", exist_ok=True)
+    os.makedirs("output_cnn_overfitting", exist_ok=True)
     main()
