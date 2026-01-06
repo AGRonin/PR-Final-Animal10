@@ -18,11 +18,6 @@ print(f"当前使用的计算设备: {DEVICE}")
 # 数据导入类设计
 class AnimalsDataset(Dataset):
     def __init__(self, root: str, split: str, transform: transforms.Compose = None):
-        """
-        root: 数据集根目录
-        split: 'train', 'val', 或 'test'
-        transform: 图像预处理流水线
-        """
         self.root = Path(root)
         self.split = split
         self.transform = transform
@@ -36,17 +31,16 @@ class AnimalsDataset(Dataset):
                         "chicken", "cat", "cow", "sheep", "spider", "squirrel"]
         self.classes_to_idx = {c: i for i, c in enumerate(self.classes)}
         df = df[df["split"] == self.split].reset_index(drop=True)
-        if self.split == "train":
-            max_per_class = 600   
-
-            df = (
-                df.groupby("label", group_keys=False)
-                  .apply(lambda x: x.sample(
-                      n=min(len(x), max_per_class),
-                      random_state=42
-                  ))
-                  .reset_index(drop=True)
-        )
+        #if self.split == "train":
+        #    max_per_class = 600   
+        #     df = (
+        #         df.groupby("label", group_keys=False)
+        #           .apply(lambda x: x.sample(
+        #               n=min(len(x), max_per_class),
+        #               random_state=42
+        #           ))
+        #           .reset_index(drop=True)
+        # )
         self.paths = [self.root / p for p in df["path"].tolist()]
         self.labels = [self.classes_to_idx[c] for c in df["label"].tolist()]
     def __len__(self):
@@ -69,11 +63,11 @@ def data_load(root):
     train_transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.RandomHorizontalFlip(),  # 水平翻转数据增强
-        transforms.ToTensor(),  # 转为 Tensor 并归一化至 [0, 1]
+        transforms.ToTensor(),  # 转换通道
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    # 验证/测试集预处理：严谨起见，不做随机增强，仅做标准化
+    # 验证/测试集预处理
     val_test_transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -112,26 +106,24 @@ def data_load(root):
 class CLIPClassifier(nn.Module):
     def __init__(self, num_classes):
         super(CLIPClassifier, self).__init__()
-
-        # 加载 CLIP
+        #加载预训练参数结果
         self.clip_model, _ = clip.load("ViT-B/32", device=DEVICE)
 
-        # 冻结全部参数
+        #冻结全部参数
         for param in self.clip_model.parameters():
             param.requires_grad = False
 
-
-        # 👉 只解冻 visual 的最后一个 transformer block（非常轻量）
+        #解冻clip最后一层参数
         for param in self.clip_model.visual.transformer.resblocks[-1].parameters():
             param.requires_grad = True
 
-        # 分类头
+        #将最后一层从512转换为类别数
         self.classifier = nn.Linear(512, num_classes)
 
     def forward(self, x):
-        # 不再使用 no_grad（因为我们解冻了最后一层）
+        #将图片变成512维的特征向量(为什么是512维 和clip模型有关，clip的核心思想是把图像和文本映射到同一个向量空间里)
         image_features = self.clip_model.encode_image(x)
-
+        #进行分类
         logits = self.classifier(image_features)
         return logits
 
@@ -215,13 +207,13 @@ def train_net(model, lr, num_epochs, train_loader, val_loader):
         list_train_acc.append(train_acc)
         print(f'\t训练正确率为{train_acc}')
 
-        # 验证准确率统计+采用最简单的早停机制控制过拟合
+        # 验证准确率统计
         verify_acc = verify_net(model, val_loader)
-        if last_val_acc > verify_acc:
-            continue
-        else:
-            last_val_acc = verify_acc
-            list_val_acc.append(verify_acc)
+        #if last_val_acc > verify_acc:
+        #    continue
+        #else:
+        #    last_val_acc = verify_acc
+        #    list_val_acc.append(verify_acc)
         if verify_acc > best_val_acc:
             best_val_acc = verify_acc
             torch.save(model.state_dict(), 'best_model_clip_freeze.pth')
@@ -272,10 +264,6 @@ def main():
     model = CLIPClassifier(num_classes).to(DEVICE)
     best_model_path = "best_model_clip_freeze.pth"
     # 训练+验证
-    # train_net(model, lr, num_epochs, train_loader, val_loader)
-    # return model, list_train_acc, list_val_acc
-    #trained_model, list_train_acc, list_val_acc, list_train_loss = train_net(model, 1e-4, 2, train_loader, val_loader)
-    #print("训练结束!\n")
     if os.path.exists(best_model_path):
         print(f"检测到已有最佳模型: {best_model_path}，直接加载跳过训练")
         model.load_state_dict(torch.load(best_model_path))
@@ -288,12 +276,10 @@ def main():
         model.to(DEVICE)
         print("训练结束!\n")
     # 绘图
-    # draw_train_plot(list_train_acc, list_val_acc, list_train_loss)
     draw_train_plot(list_train_acc, list_val_acc, list_train_loss)
 
     # 测试
     print("测试开始。。。")
-    # test_net(model, test_loader, test_dataset)
     test_net(model, test_loader, test_dataset)
     print("测试结束！\n")
     return 0
