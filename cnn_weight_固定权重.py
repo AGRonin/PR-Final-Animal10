@@ -18,7 +18,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"当前使用的计算设备: {DEVICE}")
 
 #日志
-LOG_PATH = os.path.join("output_cnn_weight", "train.log")
+LOG_PATH = os.path.join("output_cnn_w_static", "train.log")
 logger = logging.getLogger("train_logger")
 logger.setLevel(logging.INFO)
 

@@ -378,5 +378,5 @@ def main():
 
 
 if __name__ == "__main__":
-    os.makedirs("output_cnn_init)", exist_ok=True)
+    os.makedirs("output_cnn_init", exist_ok=True)
     main()

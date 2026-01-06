@@ -85,17 +85,17 @@ class AnimalsDataset(Dataset):
         # 筛选对应的数据集
         df = df[df["split"] == self.split].reset_index(drop=True)
         # 子采样
-        # if self.split == "train":
-        #     max_per_class = 200
-        #
-        #     df = (
-        #         df.groupby("label", group_keys=False)
-        #           .apply(lambda x: x.sample(
-        #               n=min(len(x), max_per_class),
-        #               random_state=42
-        #           ))
-        #           .reset_index(drop=True)
-        # )
+        if self.split == "train":
+            max_per_class = 200
+
+            df = (
+                df.groupby("label", group_keys=False)
+                  .apply(lambda x: x.sample(
+                      n=min(len(x), max_per_class),
+                      random_state=42
+                  ))
+                  .reset_index(drop=True)
+        )
         self.paths = [self.root / p for p in df["path"].tolist()]
         self.labels = [self.classes_to_idx[c] for c in df["label"].tolist()]
 
@@ -220,7 +220,7 @@ def verify_net(model, val_loader,epoch,num_epochs):
 def train_net(model, lr, num_epochs, train_loader, val_loader,patience=10):
     criterion = nn.CrossEntropyLoss() # 多分类交叉熵损失
     optimizer = torch.optim.SGD(model.parameters(),lr=lr,momentum=0.9,weight_decay=1e-4) # 定义优化器
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size=20, gamma=0.1) # 学习率调度器
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size=101, gamma=0.1) # 学习率调度器
     list_train_loss = []
     list_train_acc = []
     list_val_acc = []

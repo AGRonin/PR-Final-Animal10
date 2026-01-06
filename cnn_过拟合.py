@@ -18,7 +18,7 @@ print(f"当前使用的计算设备: {DEVICE}")
 
 
 #日志
-LOG_PATH = os.path.join("output_cnn", "train.log")
+LOG_PATH = os.path.join("output_cnn_overfitting", "train.log")
 logger = logging.getLogger("train_logger")
 logger.setLevel(logging.INFO)
 
