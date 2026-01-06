@@ -11,7 +11,7 @@ from pathlib import Path
 import pandas as pd
 from PIL import Image
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-
+from tqdm import tqdm
 # 自动检测计算设备
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"当前使用的计算设备: {DEVICE}")
@@ -256,6 +256,13 @@ def train_net(model, lr, num_epochs, train_loader, val_loader,class_weights):
         #告诉模型是训练阶段，会更新梯度和dropout
         model.train()
         total_loss = 0.0
+        progress_bar = tqdm(
+            train_loader,
+            desc=f"Epoch [{epoch + 1}/{num_epochs}]",
+            leave=False
+        )
+        correct_count = 0
+        total_count = 0
         for images, labels in train_loader:
             images, labels = images.to(DEVICE), labels.to(DEVICE)
             # 前向传播
@@ -267,7 +274,11 @@ def train_net(model, lr, num_epochs, train_loader, val_loader,class_weights):
             loss.backward()
             optimizer.step()
             #累加损失
+            preds = logits.argmax(dim=1)
+            total_count += labels.numel()
+            correct_count += (preds == labels).sum().item()
             total_loss += loss.item()
+            progress_bar.set_postfix(loss=loss.item())
         print(f'第{epoch + 1}次循环:')
 
         # 训练损失统计
@@ -276,7 +287,7 @@ def train_net(model, lr, num_epochs, train_loader, val_loader,class_weights):
         print(f"\t训练平均loss为{avg_loss}")
 
         # 训练准确率统计
-        train_acc = evaluate(model, train_loader)
+        train_acc = correct_count/total_count
         list_train_acc.append(train_acc)
         print(f'\t训练正确率为{train_acc}')
 

@@ -161,7 +161,7 @@ class CNN(nn.Module):
         #卷积层网络特征提取模块
         self.features = nn.Sequential(
             #第一层 卷积核3*3 边界扩充为1
-            #对每一个通道进行归一化
+            #对每一个通道的128张图片的每一个像素点进行归一化
             #最大池化，下采样
             nn.Conv2d(3, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(True),nn.MaxPool2d(2),
             nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(True), nn.MaxPool2d(2),
@@ -193,13 +193,18 @@ class CNN(nn.Module):
         x = self.classifier(x)
         return x
     def _initialize_weights(self):
+        #遍历所有子模块
         for m in self.modules():
+            #判断当前模块是不是二维卷积层
             if isinstance(m, nn.Conv2d):
+                #使用Kaiming方法进行参数初始化
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                #如果有偏置的话，设置偏置为0 kx+b的b
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
             elif isinstance(m, nn.Linear):
+                #用Xavier正态初始化方法，随机生成权重
                 nn.init.xavier_normal_(m.weight)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
