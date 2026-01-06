@@ -58,11 +58,6 @@ sys.stdout = PrintLogger()
 # 数据导入类设计
 class AnimalsDataset(Dataset):
     def __init__(self, root: str, split: str, transform: transforms.Compose = None):
-        """
-        root: 数据集根目录
-        split: 'train', 'val', 或 'test'
-        transform: 图像预处理流水线
-        """
         self.root = Path(root)
         self.split = split
         self.transform = transform
@@ -77,18 +72,19 @@ class AnimalsDataset(Dataset):
 
         # 筛选对应的数据集 (train/val/test)
         df = df[df["split"] == self.split].reset_index(drop=True)
-        if self.split == "train":
-            max_per_class = 600   
-
-            df = (
-                df.groupby("label", group_keys=False)
-                  .apply(lambda x: x.sample(
-                      n=min(len(x), max_per_class),
-                      random_state=42
-                  ))
-                  .reset_index(drop=True)
-        )
+        #if self.split == "train":
+        #    max_per_class = 600   
+        #    df = (
+        #        df.groupby("label", group_keys=False)
+        #          .apply(lambda x: x.sample(
+        #              n=min(len(x), max_per_class),
+        #              random_state=42
+        #          ))
+        #          .reset_index(drop=True)
+        #)
+        #构造每一张图片的路径
         self.paths = [self.root / p for p in df["path"].tolist()]
+        #将类别名转为数字标签
         self.labels = [self.classes_to_idx[c] for c in df["label"].tolist()]
 
     def __len__(self):
@@ -114,11 +110,11 @@ def data_load(root):
         transforms.RandomRotation(15),   # 随机旋转15度以内
         #随机调整图像的亮度、对比度、饱和度和色调
         transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1), # 颜色抖动
-        transforms.ToTensor(),  # 转为 Tensor 并归一化至 [0, 1]
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.ToTensor(),  # 转换维度(224*224*3→3*224*224)并归一化至 [0, 1]
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) #标准化
     ])
 
-    # 验证/测试集预处理：严谨起见，不做随机增强，仅做标准化
+    # 验证/测试集预处理
     val_test_transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -128,6 +124,7 @@ def data_load(root):
     batch_size=128
 
     train_dataset = AnimalsDataset(root=root, split="train", transform=train_transform)
+    #shuffle = True将数据的索引随机打乱
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
     val_dataset = AnimalsDataset(root=root, split="val", transform=val_test_transform)
@@ -135,12 +132,14 @@ def data_load(root):
 
     test_dataset = AnimalsDataset(root=root, split="test", transform=val_test_transform)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    #所有类别数量初始化为0
     class_counts = [0]*len(train_dataset.classes)
     for label in train_dataset.labels:
         class_counts[label] += 1
     class_weights = [1.0/count if count > 0 else 0.0 for count in class_counts]
-    # 为了更好地处理类别不平衡问题，使用加权采样器
+    #为一张图片根据类别加权
     sample_weights = [class_weights[label] for label in train_dataset.labels]
+    #创建加权采样器 replacement = True表示可以重复抽取
     sampler = torch.utils.data.WeightedRandomSampler(sample_weights, len(sample_weights), replacement=True)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
     data_class = {
@@ -158,32 +157,33 @@ def data_load(root):
 class CNN(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
-        # 1. 特征提取网络 (Backbone)
+        #卷积层网络特征提取模块
         self.features = nn.Sequential(
-            # Block 1
+            #第一层 卷积核3*3 边界扩充为1
+            #对每一个通道进行归一化
+            #最大池化，下采样
             nn.Conv2d(3, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(True),nn.MaxPool2d(2),
-            # Block 2
             nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(True), nn.MaxPool2d(2),
-            # Block 3
             nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(True), nn.MaxPool2d(2),
-            # Block 4
             nn.Conv2d(128, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(True), nn.MaxPool2d(2),
-            # Block 5
             nn.Conv2d(256, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),nn.MaxPool2d(2),
             nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),nn.MaxPool2d(2),
-            # Global Average Pooling: 无论输入尺寸如何，输出特征图均为 1x1
+            #无论输入尺寸如何，输出特征图均为 1x1
             nn.AdaptiveAvgPool2d((1, 1)), 
         )
         
-        # 2. 分类器 (Head)
+        #全连接层
         self.classifier = nn.Sequential(
+            #将多维向量展平
             nn.Flatten(),
+            #通过线性加权转为128维度
             nn.Linear(512, 128),
             nn.ReLU(True),
             nn.Dropout(0.2), # dropout 随机让部分神经元失活，防止过拟合
+            #通过线性加权输出结果
             nn.Linear(128, num_classes),
         )
-
+    #给定样本进行前向传播
     def forward(self, x):
         x = self.features(x)
         x = self.classifier(x)
@@ -235,12 +235,13 @@ def verify_net(model, val_loader):
 
 # 训练过程
 def train_net(model, lr, num_epochs, train_loader, val_loader,class_weights):
+    #转换为Tensor(可用于GPU上进行计算)
     weights_tensor = torch.tensor(class_weights).to(DEVICE)
     #定义损失函数(引入了权重处理类别不均衡的问题)
     criterion = nn.CrossEntropyLoss(weight=weights_tensor)
-    #定义优化器
+    #定义优化器，告诉优化器要优化哪些参数，lr为学习率
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    #余弦退火学习率调整
+    #余弦退火学习率调整(下降过程平滑一些)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
     #每轮训练的平均损失
     list_train_loss = []
@@ -252,7 +253,7 @@ def train_net(model, lr, num_epochs, train_loader, val_loader,class_weights):
 
     best_val_acc = 0.0
     for epoch in range(num_epochs):
-        # 训练过程
+        #告诉模型是训练阶段，会更新梯度和dropout
         model.train()
         total_loss = 0.0
         for images, labels in train_loader:
@@ -279,16 +280,17 @@ def train_net(model, lr, num_epochs, train_loader, val_loader,class_weights):
         list_train_acc.append(train_acc)
         print(f'\t训练正确率为{train_acc}')
 
-        # 验证准确率统计+采用最简单的早停机制控制过拟合
+        # 验证准确率统计
         verify_acc = verify_net(model, val_loader)
-        if last_val_acc > verify_acc:
-            continue
-        else:
-            last_val_acc = verify_acc
-            list_val_acc.append(verify_acc)
+        #if last_val_acc > verify_acc:
+        #    continue
+        #else:
+        #    last_val_acc = verify_acc
+        #    list_val_acc.append(verify_acc)
         if verify_acc > best_val_acc:
             best_val_acc = verify_acc
             torch.save(model.state_dict(), 'best_model_cnn.pth')
+        #更新学习率
         scheduler.step()
     return model, list_train_acc, list_val_acc, list_train_loss
 

@@ -57,11 +57,6 @@ sys.stdout = PrintLogger()
 # 数据导入类设计
 class AnimalsDataset(Dataset):
     def __init__(self, root: str, split: str, transform: transforms.Compose = None):
-        """
-        root: 数据集根目录
-        split: 'train', 'val', 或 'test'
-        transform: 图像预处理流水线
-        """
         self.root = Path(root)
         self.split = split
         self.transform = transform
@@ -74,20 +69,21 @@ class AnimalsDataset(Dataset):
                         "chicken", "cat", "cow", "sheep", "spider", "squirrel"]
         self.classes_to_idx = {c: i for i, c in enumerate(self.classes)}
 
-        # 筛选对应的数据集 (train/val/test)
+        # 筛选对应的数据集 (train/val/test) 并更新索引
         df = df[df["split"] == self.split].reset_index(drop=True)
-        if self.split == "train":
-            max_per_class = 600   
-
-            df = (
-                df.groupby("label", group_keys=False)
-                  .apply(lambda x: x.sample(
-                      n=min(len(x), max_per_class),
-                      random_state=42
-                  ))
-                  .reset_index(drop=True)
-        )
+        #if self.split == "train":
+        #    max_per_class = 600   
+        #    df = (
+        #        df.groupby("label", group_keys=False)
+        #          .apply(lambda x: x.sample(
+        #              n=min(len(x), max_per_class),
+        #              random_state=42
+        #          ))
+        #          .reset_index(drop=True)
+        #)
+        #保存图像路径
         self.paths = [self.root / p for p in df["path"].tolist()]
+        #将类别名转换为数字标签
         self.labels = [self.classes_to_idx[c] for c in df["label"].tolist()]
 
     def __len__(self):
@@ -98,7 +94,6 @@ class AnimalsDataset(Dataset):
         y = self.labels[idx]
         # 必须转为 RGB，因为我们的部分输入图片是RGBA的png格式，直接读取会有四个通道
         img = Image.open(path).convert("RGB")
-
         if self.transform:
             img = self.transform(img)
 
@@ -117,7 +112,7 @@ def data_load(root):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    # 验证/测试集预处理：严谨起见，不做随机增强，仅做标准化
+    # 验证/测试集预处理
     val_test_transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -156,24 +151,19 @@ def data_load(root):
 class CNN(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
-        # 1. 特征提取网络 (Backbone)
+        #卷积层
         self.features = nn.Sequential(
-            # Block 1
             nn.Conv2d(3, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(True),nn.MaxPool2d(2),
-            # Block 2
             nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(True), nn.MaxPool2d(2),
-            # Block 3
             nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(True), nn.MaxPool2d(2),
-            # Block 4
             nn.Conv2d(128, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(True), nn.MaxPool2d(2),
-            # Block 5
             nn.Conv2d(256, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),nn.MaxPool2d(2),
             nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),nn.MaxPool2d(2),
             # Global Average Pooling: 无论输入尺寸如何，输出特征图均为 1x1
             nn.AdaptiveAvgPool2d((1, 1)), 
         )
         
-        # 2. 分类器 (Head)
+        #全连接层
         self.classifier = nn.Sequential(
             nn.Flatten(),
             nn.Linear(512, 128),
@@ -202,18 +192,12 @@ def evaluate(model, dataloader):
             total_count += labels.numel()
             correct_count += (predicted == labels).sum().item()
     return correct_count / total_count
-
+#进行参数更新
 def ema_update(current_model, last_model, val_acc_current, val_acc_last, eps=1e-6):
-    """
-    current_model: 当前训练模型
-    last_model: 上一轮模型
-    val_acc_current: 当前轮验证集准确率
-    val_acc_last: 上一轮验证集准确率
-    """
-    total = val_acc_current + val_acc_last + eps  # 防止除零
-    alpha = val_acc_current / total  # 当前轮权重
-    beta = val_acc_last / total      # 上一轮权重
-
+    total = val_acc_current + val_acc_last + eps
+    alpha = val_acc_current / total 
+    beta = val_acc_last / total
+    #将参数进行加权更新     
     for p_curr, p_last in zip(current_model.parameters(), last_model.parameters()):
         p_curr.data.copy_(alpha * p_curr.data + beta * p_last.data)
 
@@ -289,18 +273,18 @@ def train_net(model, ema_model, lr, num_epochs, train_loader, val_loader,class_w
         list_train_acc.append(train_acc)
         print(f'\t训练正确率为{train_acc}')
 
-        # 验证准确率统计+采用最简单的早停机制控制过拟合
+        # 验证准确率统计
         verify_acc = verify_net(model, val_loader)
         if epoch >=40 and verify_acc < last_val_acc:
             ema_update(model, ema_model, verify_acc, last_val_acc)
             model.load_state_dict(ema_model.state_dict())
             print("\t采用EMA模型进行验证")
             verify_acc = verify_net(model, val_loader)
-        if last_val_acc > verify_acc:
-            continue
-        else:
-            last_val_acc = verify_acc
-            list_val_acc.append(verify_acc)
+        #if last_val_acc > verify_acc:
+        #    continue
+        #else:
+        #    last_val_acc = verify_acc
+        #    list_val_acc.append(verify_acc)
         if verify_acc > best_val_acc:
             best_val_acc = verify_acc
             torch.save(model.state_dict(), 'best_model_cnn_w.pth')
@@ -365,17 +349,13 @@ def main():
         print("训练结束!\n")
     # 训练+验证
     print("训练开始。。。")
-    # train_net(model, lr, num_epochs, train_loader, val_loader)
-    # return model, list_train_acc, list_val_acc
     print("训练结束!\n")
 
     # 绘图
-    # draw_train_plot(list_train_acc, list_val_acc, list_train_loss)
     draw_train_plot(list_train_acc, list_val_acc, list_train_loss)
 
     # 测试
     print("测试开始。。。")
-    # test_net(model, test_loader, test_dataset)
     test_net(model, test_loader, test_dataset)
     print("测试结束！\n")
     return 0
