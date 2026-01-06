@@ -220,7 +220,7 @@ def verify_net(model, val_loader,epoch,num_epochs):
 def train_net(model, lr, num_epochs, train_loader, val_loader,patience=10):
     criterion = nn.CrossEntropyLoss() # 多分类交叉熵损失
     optimizer = torch.optim.SGD(model.parameters(),lr=lr,momentum=0.9,weight_decay=1e-4) # 定义优化器
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size=101, gamma=0.1) # 学习率调度器
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size=10, gamma=0.8) # 学习率调度器
     list_train_loss = []
     list_train_acc = []
     list_val_acc = []
