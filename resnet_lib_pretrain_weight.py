@@ -226,7 +226,7 @@ def train_net(model, lr, num_epochs, train_loader, val_loader, class_weights, pa
     weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(DEVICE) #把列表形式的类别权重，转换PyTorch Tensor，用于损失函数加权
     criterion = nn.CrossEntropyLoss(weight=weights_tensor)  # 带类别权重的交叉熵
     optimizer = torch.optim.SGD(model.parameters(),lr=lr,momentum=0.9,weight_decay=1e-4) # 定义优化器
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size=20, gamma=0.1) # 学习率调度器
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size=10, gamma=0.8) # 学习率调度器
     list_train_loss = []
     list_train_acc = []
     list_val_acc = []
